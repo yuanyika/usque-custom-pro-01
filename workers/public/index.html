@@ -13,25 +13,26 @@
   <header class="hero pro-hero">
     <span class="badge">v6.17 · 动态地区规则 + 完整策略组</span>
     <h1>Usque MASQUE → Clash 小白版</h1>
-    <a 
+
+    <a
 
       href="https://github.com/KJGX66F/usque-custom-pro"
       target="_blank"
-      rel="noopener noreferrer"
+      rel="noopener"
       class="github-btn">
 
-     ⭐ GitHub 源码
-
+      ⭐ GitHub 开源项目
 
     </a>
 
-    
+
     <a href="https://youtu.be/eRIjgiVHsbs"
 
       class="github-btn">
       ▶️ 视频教程
 
     </a>
+
     <p>一键注册并保存原生 config.json → 选择免费落地地区 → WARP 中转 → 下载 Clash</p>
     <div class="tip">
       <b>本地优先：</b>原生 <code>config.json</code> 是唯一源文件。注册成功后请保存；之后改端点、端口、SNI、DNS、
@@ -119,7 +120,7 @@
       <span class="num">3</span>
       <div>
         <h2>分流设置</h2>
-        <p>分流已精简：只保留 AI、流媒体、国外网站 3 个主策略组；Netflix / Disney / Prime Video / HBO / Spotify / TikTok / Emby 统一进入“流媒体”。</p>
+        <p>AI、开发工具、流媒体和国外网站各自分流；Netflix / Disney / Prime Video / HBO / Spotify / TikTok / Emby 统一进入“流媒体”。</p>
       </div>
     </div>
 
@@ -127,8 +128,8 @@
     <div class="free-egress-panel">
       <div class="free-egress-head">
         <div>
-          <h3>🌍 免费落地节点池（Beta）</h3>
-          <p>无需注册 VPN 账户，也不需要 Manager / EXE。节点来自公开第三方订阅，Mihomo 自动下载、测速，并可统一经过 WARP / MASQUE 中转。</p>
+          <h3>🌍 免费落地节点池 · v7</h3>
+          <p>Pages 聚合公开美国候选节点；电脑和手机各自用 Mihomo 测速择优。WARP 注册和原始节点模式继续保留。</p>
         </div>
         <span class="simple-badge">小白测试</span>
       </div>
@@ -137,10 +138,20 @@
         ⚠️ <b>安全提醒：</b>这些是第三方公开免费节点，只适合普通网页、AI/流媒体连通性测试。不要用于网银、重要账号登录、密码或敏感数据传输。
       </div>
       <div class="free-default-note">
-        <b>默认出口：</b>AI / 流媒体走 <code>免费节点 → WARP/MASQUE 中转</code>；YouTube / 普通国外网站优先 <code>WARP</code>；国内 <code>DIRECT</code>。取消“启用免费落地节点”后恢复 WARP-only。
+        <b>v7 默认：</b>Codex / OpenAI / GitHub 走 <code>US-STABLE → US-FAST → US-RESERVE → WARP</code>；公共节点先直连、失败后经 WARP。YouTube 保留 WARP 高速策略；国内直连。WARP 兜底不保证美国出口。
       </div>
 
       <div class="free-egress-grid">
+        <label><span>节点池模式 / Profile</span><select id="poolMode">
+          <option value="stable" selected>稳定推荐 · PC</option>
+          <option value="fast">速度优先 · PC</option>
+          <option value="raw">原始节点 · v6.17</option>
+          <option value="mobile">📱 手机推荐</option>
+        </select></label>
+        <label class="switch-pro"><input id="codexOptimized" type="checkbox" checked><span>🤖 Codex 优化 · 稳定美国优先</span></label>
+        <label><span>订阅获取路径</span><select id="poolFetchPath"><option value="DIRECT">Pages 入口 · 直连</option><option value="WARP">Pages 入口 · 经 WARP</option></select></label>
+        <label><span>节点连接路径</span><select id="poolConnectionPath"><option value="AUTO">AUTO · 直连失败后经 WARP</option><option value="DIRECT">DIRECT · 直接连接节点</option><option value="WARP">WARP / MASQUE · 中转节点</option></select></label>
+        <label><span>节点池 Token（仅本地，可留空）</span><input id="poolToken" type="password" autocomplete="off" placeholder="仅在服务器设置 POOL_TOKEN 时填写"></label>
         <label class="switch-pro free-master">
           <input id="freeEgressEnabled" type="checkbox" checked>
           <span>启用免费落地节点</span>
@@ -148,7 +159,7 @@
 
         <label class="switch-pro">
           <input id="freeUseWarp" type="checkbox" checked>
-          <span>订阅下载 + 节点连接都经过 WARP / MASQUE（推荐）</span>
+          <span>原始节点模式：订阅下载 + 连接经 WARP</span>
         </label>
 
         <label>
@@ -213,11 +224,12 @@
       </div>
 
       <div class="free-groups-preview">
-        <div><b>🤖 AI 自动优选</b><small>ChatGPT 可达性测速</small></div>
-        <div><b>⚡ 免费落地自动</b><small>按当前网络实时延迟选最快</small></div>
-        <div><b>🌍 免费落地可手动</b><small>显示国家前缀，可手动切换</small></div>
+        <div><b>🤖 CODEX-US / US-STABLE</b><small>稳定优先，失败后容灾</small></div>
+        <div><b>⚡ US-FAST</b><small>本机延迟择优</small></div>
+        <div><b>🌍 US-RESERVE / US-MANUAL</b><small>备用池和手动选择</small></div>
       </div>
 
+      <div class="free-note"><button id="checkNodePool" type="button">检查节点池</button><p id="nodePoolStatus" role="status" aria-live="polite">点击检查 Pages 节点池。电脑和手机各自测速；手机无需电脑开机。</p></div>
       <div id="freeEgressHint" class="free-note">
         默认已启用混合高速：AI / 流媒体优先免费落地；YouTube / 普通国外网站优先 WARP。关闭免费落地后自动恢复 WARP-only。
       </div>

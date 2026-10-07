@@ -4,6 +4,7 @@ const $ = id => document.getElementById(id);
 const q = v => JSON.stringify(String(v ?? ""));
 const bool = v => v ? "true" : "false";
 
+let poolServerEnabled=true;
 let source=null, sourceText="", currentFormat="native", helperText="", cooldownTimer=null;
 let bridgeUuid=crypto.randomUUID?crypto.randomUUID():"11111111-1111-4111-8111-111111111111";
 
@@ -418,11 +419,18 @@ function opts(){
   controllerUrl:$("controllerUrl").value.trim()||"http://127.0.0.1:9090",
   controllerSecret:$("controllerSecret").value,
   localProxyUrl:$("localProxyUrl").value.trim()||"http://127.0.0.1:7890",
+  poolV7:$("poolMode").value!=="raw" && poolServerEnabled,
+  poolMode:$("poolMode").value,
+  poolMobile:$("poolMode").value==="mobile",
+  codexOptimized:$("codexOptimized").checked,
+  poolFetchPath:$("poolFetchPath").value,
+  poolConnectionPath:$("poolConnectionPath").value,
+  poolToken:$("poolToken").value.trim(),
   freeEnabled:$("freeEgressEnabled").checked,
   freeUseWarp:$("freeUseWarp").checked,
   freeScope:$("freeScope").value,
   freeProtocolMode:$("freeProtocolMode").value,
-  freeCountries:uniq([...baseFreeCountries,...($("customIpRoutingEnabled")?.checked?customParsed.countries:[])]),
+  freeCountries:$("poolMode").value!=="raw" && poolServerEnabled ? ["US"] : uniq([...baseFreeCountries,...($("customIpRoutingEnabled")?.checked?customParsed.countries:[])]),
   customIpEnabled:$("customIpRoutingEnabled")?.checked||false,
   customIpRules:customParsed.rules,
   customIpErrors:customParsed.errors,
@@ -561,6 +569,69 @@ const FREE_COUNTRY_META={
  US:{flag:"🇺🇸",name:"美国"},JP:{flag:"🇯🇵",name:"日本"},SG:{flag:"🇸🇬",name:"新加坡"},
  HK:{flag:"🇭🇰",name:"香港"},TW:{flag:"🇹🇼",name:"台湾"},KR:{flag:"🇰🇷",name:"韩国"}
 };
+function poolProviderId(kind,o){return "POOL-"+(kind==="ai"?"STABLE":kind==="stream"?"FAST":o.poolMode==="stable"||o.poolMobile?"STABLE":"FAST")+(o.poolConnectionPath==="WARP"?"-WARP":"");}
+function poolUrl(tier,o){
+ const url=new URL("/api/pool/provider/us-"+tier+".yaml",location.origin);
+ if(o.poolMobile)url.searchParams.set("profile","mobile");
+ return url.href;
+}
+function appendPoolProviders(a,o){
+ a.push("","proxy-providers:");
+ for(const tier of ["stable","fast","reserve"]){
+   for(const chain of (o.poolConnectionPath==="AUTO"?[false,true]:[o.poolConnectionPath==="WARP"])){
+     const id="POOL-"+tier.toUpperCase()+(chain?"-WARP":"");
+     a.push("  "+id+":","    type: http","    url: "+q(poolUrl(tier,o)),"    path: "+q("./providers/"+id.toLowerCase()+".yaml"),"    interval: "+(o.poolMobile?3600:1800),"    size-limit: 2097152","    proxy: "+q(o.poolFetchPath==="WARP"?"WARP中转":"DIRECT"));
+     if(o.poolToken)a.push("    header:","      Authorization:","        - "+q("Bearer "+o.poolToken));
+     a.push("    health-check:","      enable: true","      url: https://www.gstatic.com/generate_204","      expected-status: 204","      interval: "+(o.poolMobile?900:300),"      timeout: 9000","      lazy: true","    override:","      skip-cert-verify: false","      additional-prefix: "+q(chain?"WARP | ":"DIRECT | "));
+     if(chain)a.push('      dialer-proxy: "WARP中转"');
+   }
+ }
+}
+function appendPoolGroups(a,o){
+ const interval=o.poolMobile?900:300,auto=o.poolConnectionPath==="AUTO",suffix=o.poolConnectionPath==="WARP"?"-WARP":"";
+ for(const tier of ["STABLE","FAST","RESERVE"]){
+   const type=tier==="FAST"?"url-test":"fallback";
+   const variants=auto?["-DIRECT","-WARP"]:[""];
+   for(const variant of variants){
+     groupHeader(a,"US-"+tier+variant,type);
+     a.push("    url: https://www.gstatic.com/generate_204","    expected-status: 204","    interval: "+interval,"    timeout: 9000","    lazy: true","    max-failed-times: 2");
+     if(type==="url-test")a.push("    tolerance: 100");
+     a.push("    use:","      - "+q("POOL-"+tier+(variant==="-WARP"?"-WARP":suffix)));
+   }
+   if(auto){groupHeader(a,"US-"+tier,"fallback");a.push("    url: https://www.gstatic.com/generate_204","    expected-status: 204","    interval: "+interval,"    lazy: true","    proxies:","      - "+q("US-"+tier+"-DIRECT"),"      - "+q("US-"+tier+"-WARP"));}
+ }
+ groupHeader(a,"US-MANUAL");a.push("    proxies:",'      - "US-STABLE"','      - "US-FAST"','      - "US-RESERVE"',"    use:","      - "+q("POOL-STABLE"+suffix),"      - "+q("POOL-FAST"+suffix),"      - "+q("POOL-RESERVE"+suffix));
+ groupHeader(a,"CODEX-US","fallback");a.push("    url: https://api.openai.com/v1/models",'    expected-status: "200-299/401"',"    interval: "+interval,"    timeout: 9000","    lazy: true","    proxies:",'      - "US-STABLE"','      - "US-FAST"','      - "US-RESERVE"','      - "WARP中转"');
+ groupHeader(a,"AI-US");a.push("    proxies:",'      - "CODEX-US"','      - "US-STABLE"','      - "US-FAST"','      - "WARP中转"');
+}
+function appendCodexRules(a){
+ a.push("  # Codex / development traffic: before broad AI and foreign rules");
+ for(const domain of ["openai.com","chatgpt.com","oaistatic.com","oaiusercontent.com","github.com","githubusercontent.com","githubassets.com","npmjs.org","pypi.org","pythonhosted.org","python.org"])a.push("  - DOMAIN-SUFFIX,"+domain+",CODEX-US");
+}
+function finalizePoolProfile(a,o){
+ if(!o.poolV7||!o.freeEnabled)return a;
+ // v6's hidden speed groups are retained, with lower background activity in v7.
+ return a.map(line=>{
+   if(/^    interval: \d+$/.test(line)&&Number(line.split(":")[1])<1800)return "    interval: "+(o.poolMobile?900:300);
+   if(line==="    lazy: false")return "    lazy: true";
+   return line;
+ });
+}
+async function checkNodePool(){
+ const button=$("checkNodePool"),output=$("nodePoolStatus");button.disabled=true;output.textContent="正在检查 Pages 节点池…";
+ try{
+   const token=$("poolToken").value.trim(),headers=token?{Authorization:"Bearer "+token}:{};
+   const res=await fetch("/api/pool/status",{headers,cache:"no-store"});if(!res.ok)throw new Error("状态接口 HTTP "+res.status);
+   const status=await res.json();
+   if(status.enabled===false){poolServerEnabled=false;$("poolMode").value="raw";updateFreeEgressHint();markDirty("poolMode",false);output.textContent="服务端已关闭 v7；已恢复原始节点模式，请应用设置重新生成。";return;}
+   poolServerEnabled=true;
+   const provider=await fetch("/api/pool/provider/us-stable.yaml",{headers,cache:"no-store"});
+   if(!provider.ok)throw new Error("Stable provider HTTP "+provider.status);
+   const yaml=await provider.text();if(!/^proxies:/m.test(yaml)||!/^\s+-\s+(?:type:|name:|server:)/m.test(yaml))throw new Error("Provider 格式异常");
+   const c=status.counts;
+   output.textContent=status.state+(status.stale?" · 使用最近可用缓存":"")+" · 原始 "+c.raw+" / 去重 "+c.deduped+" / US "+c.us+" · Stable "+c.stable+" / Fast "+c.fast+" / Reserve "+c.reserve+" · 更新 "+status.updated_at+" · "+status.sources.map(s=>s.id+": "+s.state).join("；")+" · 本次检查 "+new Date().toLocaleString();
+ }catch(e){output.textContent="检查未通过："+e.message+"。现有 WARP 生成仍可使用。";}finally{button.disabled=false;}
+}
 function freeProviderId(code,kind="general"){return `FREE-${code}-${kind.toUpperCase()}`}
 function freeProviderUrl(code){
  return `https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-${code}.yaml`;
@@ -629,6 +700,7 @@ function appendOneFreeProvider(a,o,code,kind){
 }
 function appendFreeProviders(a,o){
  if(!o.freeEnabled)return;
+ if(o.poolV7){appendPoolProviders(a,o);return;}
  if(!o.freeCountries.length)throw new Error("已启用免费落地，但没有选择任何国家/地区");
  a.push("","proxy-providers:");
  for(const code of o.freeCountries){
@@ -640,6 +712,7 @@ function appendFreeProviders(a,o){
  }
 }
 function appendProviderUse(a,o,kind="general",indent="      "){
+ if(o.poolV7){a.push(`${indent}- ${q(poolProviderId(kind,o))}`);return;}
  for(const code of o.freeCountries)a.push(`${indent}- ${q(freeProviderId(code,kind))}`);
 }
 
@@ -679,6 +752,7 @@ function appendCustomIpRules(a,o){
 function clashGroupsAndRules(names,o){
  const a=["","proxy-groups:"];
  const freeOn=o.freeEnabled&&o.freeCountries.length>0;
+ const poolOn=freeOn&&o.poolV7;
 
  groupHeader(a,"🚀 WARP自动","url-test");
  a.push(
@@ -696,6 +770,8 @@ function clashGroupsAndRules(names,o){
 
  groupHeader(a,"WARP中转");
  a.push("    hidden: true","    proxies:",'      - "🚀 WARP自动"','      - "🌎 WARP可手动"');
+
+ if(poolOn)appendPoolGroups(a,o);
 
  if(freeOn){
    groupHeader(a,"⚡ 免费落地自动","url-test");
@@ -730,7 +806,7 @@ function clashGroupsAndRules(names,o){
        "    hidden: true",
        "    url: https://www.gstatic.com/generate_204","    expected-status: 204",
        "    interval: 120","    tolerance: 20","    timeout: 5000","    lazy: false","    max-failed-times: 2",
-       "    use:",`      - ${q(freeProviderId(code,"general"))}`
+       "    use:",`      - ${q(o.poolV7?poolProviderId("general",o):freeProviderId(code,"general"))}`
      );
    }
  }
@@ -779,6 +855,7 @@ function clashGroupsAndRules(names,o){
  // AI
  groupHeader(a,"🤖 AI");
  a.push("    proxies:");
+ if(poolOn)a.push('      - "AI-US"');
  if(freeOn&&freeForService(o,"AI"))a.push('      - "🤖 AI自动优选"');
  if(freeOn)appendCountryChoices(a,o);
  a.push('      - "🚀 节点选择"');
@@ -841,7 +918,8 @@ function clashGroupsAndRules(names,o){
  a.push('      - "🌎 WARP可手动"','      - "🎯 全球直连"');
 
  groupHeader(a,"🌐 国外网站");
- a.push("    proxies:",'      - "🚀 WARP自动"','      - "🚀 节点选择"','      - "♻️ 自动选择"');
+ if(poolOn){a.push("    proxies:",'      - "US-FAST"');}else a.push("    proxies:");
+ a.push('      - "🚀 WARP自动"','      - "🚀 节点选择"','      - "♻️ 自动选择"');
  if(freeOn)appendCountryChoices(a,o);
  a.push('      - "🌎 WARP可手动"','      - "🎯 全球直连"');
 
@@ -854,7 +932,9 @@ function clashGroupsAndRules(names,o){
  a.push("    hidden: true","    proxies:",'      - "🚀 节点选择"','      - "🌐 国外网站"','      - "🚀 WARP自动"',"      - DIRECT");
 
  if(o.ruleMode==="global"){
-   a.push("","rules:","  - MATCH,🚀 节点选择","");
+   a.push("","rules:");
+   if(poolOn&&o.codexOptimized)appendCodexRules(a);
+   a.push("  - MATCH,🚀 节点选择","");
    return a;
  }
 
@@ -876,7 +956,10 @@ function clashGroupsAndRules(names,o){
    );
    if(freeOn&&o.freeUseWarp)a.push('    proxy: "WARP中转"');
    a.push(
-     "","rules:",
+     "","rules:"
+   );
+   if(poolOn&&o.codexOptimized)appendCodexRules(a);
+   a.push(
      "  - RULE-SET,youtube,▶️ YouTube高速",
      "  - RULE-SET,cn,🎯 全球直连",
      "  - RULE-SET,cn_ip,🎯 全球直连,no-resolve",
@@ -903,6 +986,7 @@ function clashGroupsAndRules(names,o){
  }
 
  a.push("","rules:");
+ if(poolOn&&o.codexOptimized)appendCodexRules(a);
  if(o.adBlock){
    a.push("  - RULE-SET,category-ads-all,🛑 全球拦截","  - RULE-SET,ad_ip,🛑 全球拦截,no-resolve");
  }
@@ -957,6 +1041,7 @@ function clashGroupsAndRules(names,o){
 function buildClash(){
  if(!source)throw new Error("请先加载原生 config.json");
  const o=opts(),pairs=connectionPairs(),names=[];
+ if(o.poolV7&&o.customIpEnabled&&o.customIpRules.some(r=>["JP","SG","HK","TW","KR"].includes(r.target)))throw new Error("v7 只提供美国池；其它地区请切换原始节点模式");
  if(o.customIpEnabled&&o.customIpErrors.length)throw new Error("自定义 IP 分流规则有误："+o.customIpErrors[0]);
  if(o.customIpEnabled&&!o.freeEnabled&&o.customIpRules.some(r=>["US","JP","SG","HK","TW","KR","FREE"].includes(r.target))){
    throw new Error("自定义 IP 规则使用了地区/免费出口，但免费落地节点已关闭。请启用免费落地，或把目标改成 WARP / DIRECT。");
@@ -979,7 +1064,7 @@ function buildClash(){
  pairs.forEach(([server,port],i)=>{const n=nodeName(server,port,i);names.push(n);makeNode(a,n,server,port,o)});
  appendFreeProviders(a,o);
  a.push(...clashGroupsAndRules(names,o));
- return a.join("\n");
+ return finalizePoolProfile(a,o).join("\n");
 }
 
 function buildShadowrocket(){
@@ -1171,6 +1256,10 @@ function updateFreeEgressHint(){
  const enabled=$("freeEgressEnabled").checked;
  const countries=selectedFreeLabels();
  const scope=$("freeScope").selectedOptions?.[0]?.textContent||$("freeScope").value;
+ if($("poolMode").value!=="raw"&&poolServerEnabled){
+   $("freeEgressHint").textContent=enabled?"v7 美国候选池 · Pages 聚合 · "+($("poolMode").value==="mobile"?"手机每 15 分钟健康检查 / 每小时更新":"PC 每 5 分钟健康检查 / 每 30 分钟更新")+" · 连接路径 "+$("poolConnectionPath").value+"。WARP 兜底不保证美国出口；公共池不是固定 IP。":"免费节点已关闭，使用现有 WARP 功能。";
+   return;
+ }
  const chain=$("freeUseWarp").checked?"订阅下载 + 节点连接均经 WARP/MASQUE":"直接下载 / 直接连接免费节点";
  $("freeEgressHint").textContent=enabled
    ?`已启用：${scope}；地区：${countries.join(" / ")||"未选择"}；${chain}。`
@@ -1203,8 +1292,9 @@ function resetRecommended(){
  $("egressChatgptFirst").checked=true;$("egressApplyAll").checked=false;$("enableControllerApi").checked=true;
  $("nodeTag").value="CDN";$("profileName").value="MASQUE-Pro";$("nodeCountMode").value="13";$("customNodeCount").value="100";$("nodeBuildMode").value="balanced";$("extraEndpoints").value="";$("nodeNaming").value="detail";
  $("udpForward").checked=true;$("remoteDns").checked=true;$("autoSelect").checked=true;$("showIcons").checked=true;$("adBlock").checked=true;$("includeTestEndpoints").checked=true;$("dedupeNodes").checked=true;$("h2ExtendedPool").checked=true;
+ $("poolMode").value="stable";$("codexOptimized").checked=true;$("poolFetchPath").value="DIRECT";$("poolConnectionPath").value="AUTO";
  $("freeEgressEnabled").checked=true;$("freeUseWarp").checked=true;$("freeScope").value="ai-streaming";$("freeProtocolMode").value="stable";
- $("freeUS").checked=true;$("freeJP").checked=true;$("freeSG").checked=true;$("freeHK").checked=false;$("freeTW").checked=false;$("freeKR").checked=false;
+ $("freeUS").checked=true;$("freeJP").checked=false;$("freeSG").checked=false;$("freeHK").checked=false;$("freeTW").checked=false;$("freeKR").checked=false;
  $("customIpRoutingEnabled").checked=false;$("customIpRoutingRules").value="";
  syncConditional();updateEstimate();updateFreeEgressHint();updateCustomIpRoutingHint();
 }
@@ -1221,6 +1311,8 @@ function preset(name){
  toast(`已载入“${presetNames[name]||name}”预设。`,"info","预设已切换");
 }
 function syncConditional(){
+ const v7=$("poolMode").value!=="raw"&&poolServerEnabled;
+ for(const id of ["freeUS","freeJP","freeSG","freeHK","freeTW","freeKR","freeUseWarp","freeProtocolMode"])$(id).disabled=v7;
  $("customEndpointWrap").className=$("endpointPreset").value==="custom"?"":"hidden";
  $("customPortWrap").className=$("portPreset").value==="custom"?"":"hidden";
  $("customSniWrap").className=$("sniPreset").value==="custom"?"":"hidden";
@@ -1232,9 +1324,10 @@ function syncConditional(){
  if($("networkMode").value==="h3-l4proxy")$("udpForward").checked=false;
 }
 
-const selectSettingIds=["freeEgressEnabled","freeUseWarp","freeScope","freeProtocolMode","freeUS","freeJP","freeSG","freeHK","freeTW","freeKR","customIpRoutingEnabled","endpointPreset","portPreset","sniPreset","dnsPreset","innerIpMode","networkMode","stackMode","ccMode","outerCc","bbrProfile","mtuPreset","handshakeTimeout","ruleMode","healthUrl","healthInterval","healthTolerance","aiHealthMode","chatgptRouteMode","otherAiRouteMode","chatgptDirectFallback","egressCountry1","egressCountry2","egressCountry3","egressChatgptFirst","egressApplyAll","enableControllerApi","nodeCountMode","nodeBuildMode","nodeNaming","udpForward","remoteDns","autoSelect","showIcons","adBlock","includeTestEndpoints","dedupeNodes","h2ExtendedPool"];
+const selectSettingIds=["poolMode","codexOptimized","poolFetchPath","poolConnectionPath","freeEgressEnabled","freeUseWarp","freeScope","freeProtocolMode","freeUS","freeJP","freeSG","freeHK","freeTW","freeKR","customIpRoutingEnabled","endpointPreset","portPreset","sniPreset","dnsPreset","innerIpMode","networkMode","stackMode","ccMode","outerCc","bbrProfile","mtuPreset","handshakeTimeout","ruleMode","healthUrl","healthInterval","healthTolerance","aiHealthMode","chatgptRouteMode","otherAiRouteMode","chatgptDirectFallback","egressCountry1","egressCountry2","egressCountry3","egressChatgptFirst","egressApplyAll","enableControllerApi","nodeCountMode","nodeBuildMode","nodeNaming","udpForward","remoteDns","autoSelect","showIcons","adBlock","includeTestEndpoints","dedupeNodes","h2ExtendedPool"];
 selectSettingIds.forEach(id=>$(id).addEventListener("change",()=>{
  syncConditional();updateEstimate();
+ if(["poolMode","codexOptimized","poolFetchPath","poolConnectionPath"].includes(id))updateFreeEgressHint();
  if(id==="chatgptRouteMode"||id==="otherAiRouteMode")updateChatgptRouteHint();
  if(["freeEgressEnabled","freeUseWarp","freeScope","freeProtocolMode","freeUS","freeJP","freeSG","freeHK","freeTW","freeKR"].includes(id))updateFreeEgressHint();
  if(id==="customIpRoutingEnabled")updateCustomIpRoutingHint();
@@ -1300,7 +1393,7 @@ $("fmtVless").addEventListener("click",()=>{try{setFormat("vless");toast("VLESS 
 $("copyMain").addEventListener("click",()=>copyText($("mainOutput").value,$("copyMain")));
 $("downloadMain").addEventListener("click",()=>{
  if(currentFormat==="native")download("usque-config.json",$("mainOutput").value,"application/json");
- if(currentFormat==="clash")download("masque-clash-smart.yaml",$("mainOutput").value,"text/yaml");
+ if(currentFormat==="clash")download(opts().poolV7?(opts().poolMobile?"mihomo-mobile.yaml":"mihomo-pc.yaml"):"masque-clash-smart.yaml",$("mainOutput").value,"text/yaml");
  if(currentFormat==="shadowrocket")download("masque-shadowrocket.yaml",$("mainOutput").value,"text/yaml");
  if(currentFormat==="singbox")download("sing-box-usque.json",$("mainOutput").value,"application/json");
  if(currentFormat==="vless")download("usque-vless-local.txt",$("mainOutput").value,"text/plain");
@@ -1319,5 +1412,11 @@ $("downloadEgressConfig").addEventListener("click",()=>{
   download("warp-egress-preference.json",JSON.stringify(egressPreferences(),null,2),"application/json");
 });
 
+$("checkNodePool").addEventListener("click",checkNodePool);
+$("poolToken").addEventListener("input",()=>markDirty("poolToken",false));
 resetRecommended();syncConditional();updateEstimate();updateFreeEgressHint();updateCustomIpRoutingHint();setSettingsState("clean","当前设置已应用");
+// Read the feature flag on load, without private configuration or device credentials.
+fetch('/api/pool/status',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(s=>{
+ if(s?.enabled===false){poolServerEnabled=false;$("poolMode").value="raw";updateFreeEgressHint();$("nodePoolStatus").textContent="服务端 v7 已关闭，使用原始节点模式。";}
+}).catch(()=>{});
 })();

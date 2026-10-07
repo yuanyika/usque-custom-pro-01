@@ -1,0 +1,13 @@
+{
+  "name": "usque-node-pool-v7",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "preview": "wrangler pages dev pages --port 18787",
+    "deploy:preview": "wrangler pages deploy pages --project-name usque-custom-pro-01 --branch codex/node-pool-v7"
+  },
+  "dependencies": {"yaml": "2.8.1"},
+  "devDependencies": {"esbuild": "0.25.10", "wrangler": "4.40.2"}
+}

@@ -1,0 +1,10 @@
+node_modules/
+.wrangler/
+.dev.vars*
+.env*
+*.log
+artifacts/
+usque-config.json
+config.json
+warp-egress-report-*
+*.local.yaml

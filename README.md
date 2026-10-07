@@ -1,5 +1,9 @@
 # Usque MASQUE Pro v6.17 — 动态地区规则 + 完整策略组
 
+> v7 开发版新增美国候选池、CODEX-US 与 PC/手机 Profile，保留原客户端输出和 `pages/` 部署。先使用 Preview 验证；当前活动 Clash 不会被开发脚本修改。
+>
+> [v7 使用与架构](docs/NODE_POOL_V7.md) · [手机设置](docs/MOBILE_SETUP.md) · [Codex 网络](docs/CODEX_NETWORK.md) · [回滚](docs/ROLLBACK.md) · [实现报告](CODEX_IMPLEMENTATION_REPORT.md)
+
 > 基于 Cloudflare WARP / MASQUE 的可视化注册、配置生成与多客户端转换工具。  
 > 支持 **Cloudflare Pages + Cloudflare Workers 双部署**，浏览器完成 Usque 注册、原生配置保存、MASQUE 多节点生成、Clash/Mihomo 智能分流、Shadowrocket、sing-box、本地 VLESS 桥接，以及可选的 WARP 出口检测。
 >
